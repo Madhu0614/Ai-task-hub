@@ -4,6 +4,9 @@ const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
 const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
 
 if (!supabaseUrl || !supabaseAnonKey) {
+  console.error('Missing Supabase environment variables');
+  console.error('NEXT_PUBLIC_SUPABASE_URL:', supabaseUrl ? 'Set' : 'Missing');
+  console.error('NEXT_PUBLIC_SUPABASE_ANON_KEY:', supabaseAnonKey ? 'Set' : 'Missing');
   throw new Error('Missing Supabase environment variables. Please check your .env.local file.');
 }
 
@@ -84,15 +87,38 @@ export interface UserCursor {
 // Test Supabase connection
 export const testConnection = async () => {
   try {
+    console.log('Testing Supabase connection...');
+    console.log('Supabase URL:', supabaseUrl);
+    console.log('Supabase Key:', supabaseAnonKey ? 'Present' : 'Missing');
+    
     const { data, error } = await supabase.from('profiles').select('count').limit(1);
+    
     if (error) {
       console.error('Supabase connection test failed:', error);
       return false;
     }
+    
     console.log('Supabase connection successful');
     return true;
   } catch (error) {
     console.error('Supabase connection test error:', error);
     return false;
+  }
+};
+
+// Check if user is authenticated
+export const checkAuth = async () => {
+  try {
+    const { data: { user }, error } = await supabase.auth.getUser();
+    
+    if (error) {
+      console.error('Auth check error:', error);
+      return null;
+    }
+    
+    return user;
+  } catch (error) {
+    console.error('Auth check failed:', error);
+    return null;
   }
 };

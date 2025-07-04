@@ -1,3 +1,5 @@
+"use client";
+
 import { useEffect, useState, useCallback, useRef } from 'react';
 import { useRouter, useParams } from 'next/navigation';
 import { motion, AnimatePresence } from 'framer-motion';
@@ -123,15 +125,22 @@ export default function BoardPage() {
   useEffect(() => {
     const initializeBoard = async () => {
       try {
+        console.log('Initializing board:', boardId);
+        
         const currentUser = await getCurrentUser();
         if (!currentUser) {
+          console.log('No user found, redirecting to login');
           router.push('/login');
           return;
         }
+        
+        console.log('Current user:', currentUser);
         setUser(currentUser);
 
+        console.log('Fetching board data...');
         const boardData = await boardService.getBoard(boardId);
         if (!boardData) {
+          console.log('Board not found');
           toast({
             title: "Board not found",
             description: "The board you're looking for doesn't exist or you don't have access to it.",
@@ -140,10 +149,15 @@ export default function BoardPage() {
           router.push('/dashboard');
           return;
         }
+        
+        console.log('Board data:', boardData);
         setBoard(boardData);
 
         // Load board elements
+        console.log('Loading board elements...');
         const boardElements = await boardService.getBoardElements(boardId);
+        console.log('Board elements:', boardElements);
+        
         const convertedElements: CanvasElementData[] = boardElements.map(element => ({
           id: element.id,
           type: element.type as any,
@@ -162,6 +176,7 @@ export default function BoardPage() {
         setElements(convertedElements);
 
         // Initialize real-time collaboration
+        console.log('Initializing real-time collaboration...');
         realtimeRef.current = new RealtimeCollaboration(boardId, currentUser.id);
         await realtimeRef.current.initialize(
           (newCursors) => setCursors(newCursors),
@@ -186,18 +201,21 @@ export default function BoardPage() {
         );
 
         setLoading(false);
+        console.log('Board initialization complete');
       } catch (error) {
         console.error('Error initializing board:', error);
         toast({
-          title: "Error",
-          description: "Failed to load board",
+          title: "Error loading board",
+          description: error instanceof Error ? error.message : "Failed to load board",
           variant: "destructive",
         });
         router.push('/dashboard');
       }
     };
 
-    initializeBoard();
+    if (boardId) {
+      initializeBoard();
+    }
 
     return () => {
       if (realtimeRef.current) {
@@ -372,14 +390,33 @@ export default function BoardPage() {
     }
   };
 
-  if (loading || !user || !board) {
+  if (loading) {
     return (
       <div className="min-h-screen bg-slate-50 flex items-center justify-center">
-        <motion.div
-          animate={{ rotate: 360 }}
-          transition={{ duration: 1, repeat: Infinity, ease: 'linear' }}
-          className="w-8 h-8 border-2 border-blue-500 border-t-transparent rounded-full"
-        />
+        <div className="text-center">
+          <motion.div
+            animate={{ rotate: 360 }}
+            transition={{ duration: 1, repeat: Infinity, ease: 'linear' }}
+            className="w-8 h-8 border-2 border-blue-500 border-t-transparent rounded-full mx-auto mb-4"
+          />
+          <p className="text-slate-600">Loading board...</p>
+        </div>
+      </div>
+    );
+  }
+
+  if (!user || !board) {
+    return (
+      <div className="min-h-screen bg-slate-50 flex items-center justify-center">
+        <div className="text-center">
+          <p className="text-slate-600">Board not found or access denied</p>
+          <Button 
+            onClick={() => router.push('/dashboard')}
+            className="mt-4"
+          >
+            Return to Dashboard
+          </Button>
+        </div>
       </div>
     );
   }

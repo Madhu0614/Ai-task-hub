@@ -21,13 +21,30 @@ export default function TemplatesSection({ user, onBoardCreate }: TemplatesSecti
   const handleTemplateClick = async (template: any) => {
     try {
       const boardName = template.name === 'Blank board' ? 'Untitled' : template.name;
+      
+      toast({
+        title: "Creating board...",
+        description: "Please wait while we set up your new board.",
+      });
+
+      console.log('Creating board:', { name: boardName, type: template.type });
+      
       const newBoard = await boardService.createBoard(boardName, template.type);
+      
+      console.log('Board created successfully:', newBoard);
+      
+      toast({
+        title: "Board created!",
+        description: `${boardName} has been created successfully.`,
+      });
+      
       onBoardCreate();
       router.push(`/board/${newBoard.id}`);
     } catch (error) {
+      console.error('Error creating board:', error);
       toast({
-        title: "Error",
-        description: "Failed to create board",
+        title: "Failed to create board",
+        description: error instanceof Error ? error.message : "An unexpected error occurred. Please try again.",
         variant: "destructive",
       });
     }
