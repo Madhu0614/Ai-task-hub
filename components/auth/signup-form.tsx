@@ -3,12 +3,14 @@
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { motion } from 'framer-motion';
-import { Eye, EyeOff, Mail, Lock, User } from 'lucide-react';
+import { Eye, EyeOff, Mail, Lock, User, AlertCircle } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+import { Alert, AlertDescription } from '@/components/ui/alert';
 import { signUp } from '@/lib/auth';
+import { testConnection } from '@/lib/supabase';
 import { useToast } from '@/hooks/use-toast';
 
 export default function SignUpForm() {
@@ -19,8 +21,18 @@ export default function SignUpForm() {
   const [showPassword, setShowPassword] = useState(false);
   const [showConfirmPassword, setShowConfirmPassword] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
+  const [connectionError, setConnectionError] = useState(false);
   const router = useRouter();
   const { toast } = useToast();
+
+  // Test connection on component mount
+  useState(() => {
+    testConnection().then(success => {
+      if (!success) {
+        setConnectionError(true);
+      }
+    });
+  });
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -43,19 +55,29 @@ export default function SignUpForm() {
       return;
     }
 
+    if (!name.trim()) {
+      toast({
+        title: "Error",
+        description: "Please enter your full name",
+        variant: "destructive",
+      });
+      return;
+    }
+
     setIsLoading(true);
 
     try {
-      await signUp(email, password, name);
+      await signUp(email, password, name.trim());
       toast({
-        title: "Account created!",
-        description: "Please check your email to verify your account.",
+        title: "Account created successfully!",
+        description: "You can now sign in with your credentials.",
       });
       router.push('/login');
     } catch (error) {
+      console.error('Signup error:', error);
       toast({
-        title: "Error",
-        description: error instanceof Error ? error.message : "Failed to create account",
+        title: "Error creating account",
+        description: error instanceof Error ? error.message : "Failed to create account. Please try again.",
         variant: "destructive",
       });
     } finally {
@@ -87,6 +109,15 @@ export default function SignUpForm() {
             </CardDescription>
           </CardHeader>
           <CardContent className="p-8">
+            {connectionError && (
+              <Alert className="mb-6 border-amber-200 bg-amber-50">
+                <AlertCircle className="h-4 w-4 text-amber-600" />
+                <AlertDescription className="text-amber-800">
+                  Please ensure Supabase is connected. Click "Connect to Supabase" in the top right corner.
+                </AlertDescription>
+              </Alert>
+            )}
+
             <form onSubmit={handleSubmit} className="space-y-6">
               <div className="space-y-2">
                 <Label htmlFor="name" className="text-sm font-medium text-slate-700">
@@ -133,11 +164,12 @@ export default function SignUpForm() {
                   <Input
                     id="password"
                     type={showPassword ? 'text' : 'password'}
-                    placeholder="Create a password"
+                    placeholder="Create a password (min. 6 characters)"
                     value={password}
                     onChange={(e) => setPassword(e.target.value)}
                     className="pl-11 pr-12 bg-slate-50 border-slate-200 focus:bg-white transition-all duration-200 h-12 rounded-xl"
                     required
+                    minLength={6}
                   />
                   <Button
                     type="button"
@@ -189,7 +221,7 @@ export default function SignUpForm() {
               <Button
                 type="submit"
                 className="w-full bg-gradient-to-r from-blue-500 to-violet-600 hover:from-blue-600 hover:to-violet-700 text-white font-medium py-3 h-12 rounded-xl shadow-lg hover:shadow-xl transition-all duration-200"
-                disabled={isLoading}
+                disabled={isLoading || connectionError}
               >
                 {isLoading ? (
                   <motion.div

@@ -3,12 +3,14 @@
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { motion } from 'framer-motion';
-import { Eye, EyeOff, Mail, Lock } from 'lucide-react';
+import { Eye, EyeOff, Mail, Lock, AlertCircle } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+import { Alert, AlertDescription } from '@/components/ui/alert';
 import { signIn } from '@/lib/auth';
+import { testConnection } from '@/lib/supabase';
 import { useToast } from '@/hooks/use-toast';
 
 export default function LoginForm() {
@@ -16,8 +18,18 @@ export default function LoginForm() {
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
+  const [connectionError, setConnectionError] = useState(false);
   const router = useRouter();
   const { toast } = useToast();
+
+  // Test connection on component mount
+  useState(() => {
+    testConnection().then(success => {
+      if (!success) {
+        setConnectionError(true);
+      }
+    });
+  });
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -31,9 +43,10 @@ export default function LoginForm() {
       });
       router.push('/dashboard');
     } catch (error) {
+      console.error('Login error:', error);
       toast({
-        title: "Error",
-        description: error instanceof Error ? error.message : "Invalid credentials",
+        title: "Sign in failed",
+        description: error instanceof Error ? error.message : "Invalid credentials. Please try again.",
         variant: "destructive",
       });
     } finally {
@@ -65,6 +78,15 @@ export default function LoginForm() {
             </CardDescription>
           </CardHeader>
           <CardContent className="p-8">
+            {connectionError && (
+              <Alert className="mb-6 border-amber-200 bg-amber-50">
+                <AlertCircle className="h-4 w-4 text-amber-600" />
+                <AlertDescription className="text-amber-800">
+                  Please ensure Supabase is connected. Click "Connect to Supabase" in the top right corner.
+                </AlertDescription>
+              </Alert>
+            )}
+
             <form onSubmit={handleSubmit} className="space-y-6">
               <div className="space-y-2">
                 <Label htmlFor="email" className="text-sm font-medium text-slate-700">
@@ -116,7 +138,7 @@ export default function LoginForm() {
               <Button
                 type="submit"
                 className="w-full bg-gradient-to-r from-blue-500 to-violet-600 hover:from-blue-600 hover:to-violet-700 text-white font-medium py-3 h-12 rounded-xl shadow-lg hover:shadow-xl transition-all duration-200"
-                disabled={isLoading}
+                disabled={isLoading || connectionError}
               >
                 {isLoading ? (
                   <motion.div
