@@ -4,7 +4,8 @@ import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { motion } from 'framer-motion';
 import { getCurrentUser, User } from '@/lib/auth';
-import { Board, boardStorage, initializeSampleBoards } from '@/lib/boards';
+import { boardService, boardTemplates } from '@/lib/boards';
+import type { Board } from '@/lib/supabase';
 import Sidebar from '@/components/dashboard/sidebar';
 import Header from '@/components/dashboard/header';
 import TemplatesSection from '@/components/dashboard/templates-section';
@@ -18,21 +19,33 @@ export default function DashboardPage() {
   const router = useRouter();
 
   useEffect(() => {
-    const currentUser = getCurrentUser();
-    if (!currentUser) {
-      router.push('/login');
-      return;
-    }
-    
-    setUser(currentUser);
-    initializeSampleBoards(currentUser.id, currentUser.name);
-    loadBoards();
-    setLoading(false);
+    const initializeDashboard = async () => {
+      try {
+        const currentUser = await getCurrentUser();
+        if (!currentUser) {
+          router.push('/login');
+          return;
+        }
+        
+        setUser(currentUser);
+        await loadBoards();
+        setLoading(false);
+      } catch (error) {
+        console.error('Error initializing dashboard:', error);
+        router.push('/login');
+      }
+    };
+
+    initializeDashboard();
   }, [router]);
 
-  const loadBoards = () => {
-    const allBoards = boardStorage.getBoards();
-    setBoards(allBoards);
+  const loadBoards = async () => {
+    try {
+      const allBoards = await boardService.getBoards();
+      setBoards(allBoards);
+    } catch (error) {
+      console.error('Error loading boards:', error);
+    }
   };
 
   if (loading || !user) {

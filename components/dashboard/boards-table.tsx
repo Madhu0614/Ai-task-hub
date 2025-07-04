@@ -31,8 +31,10 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
-import { Board, boardStorage } from '@/lib/boards';
+import { boardService } from '@/lib/boards';
+import type { Board } from '@/lib/supabase';
 import { useRouter } from 'next/navigation';
+import { useToast } from '@/hooks/use-toast';
 
 interface BoardsTableProps {
   boards: Board[];
@@ -46,6 +48,7 @@ export default function BoardsTable({ boards, currentUser, onBoardsChange }: Boa
   const [ownedBy, setOwnedBy] = useState('anyone');
   const [viewMode, setViewMode] = useState<'grid' | 'list'>('list');
   const router = useRouter();
+  const { toast } = useToast();
 
   const getBoardTypeColor = (type: string) => {
     switch (type) {
@@ -67,38 +70,58 @@ export default function BoardsTable({ boards, currentUser, onBoardsChange }: Boa
     }
   };
 
-  const handleStarToggle = (boardId: string, e: React.MouseEvent) => {
+  const handleStarToggle = async (boardId: string, e: React.MouseEvent) => {
     e.stopPropagation();
-    boardStorage.toggleStar(boardId);
-    onBoardsChange();
+    try {
+      await boardService.toggleStar(boardId);
+      onBoardsChange();
+    } catch (error) {
+      toast({
+        title: "Error",
+        description: "Failed to update board",
+        variant: "destructive",
+      });
+    }
   };
 
   const handleBoardClick = (boardId: string) => {
     router.push(`/board/${boardId}`);
   };
 
-  const handleDeleteBoard = (boardId: string, e: React.MouseEvent) => {
+  const handleDeleteBoard = async (boardId: string, e: React.MouseEvent) => {
     e.stopPropagation();
     if (confirm('Are you sure you want to delete this board?')) {
-      boardStorage.deleteBoard(boardId);
-      onBoardsChange();
+      try {
+        await boardService.deleteBoard(boardId);
+        onBoardsChange();
+        toast({
+          title: "Board deleted",
+          description: "The board has been successfully deleted.",
+        });
+      } catch (error) {
+        toast({
+          title: "Error",
+          description: "Failed to delete board",
+          variant: "destructive",
+        });
+      }
     }
   };
 
   const sortedAndFilteredBoards = boards
     .filter(board => {
       if (filterBy === 'starred' && !board.starred) return false;
-      if (ownedBy === 'me' && board.ownerId !== currentUser) return false;
+      if (ownedBy === 'me' && board.owner_id !== currentUser) return false;
       return true;
     })
     .sort((a, b) => {
       switch (sortBy) {
         case 'last-opened':
-          return b.updatedAt.getTime() - a.updatedAt.getTime();
+          return new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime();
         case 'name':
           return a.name.localeCompare(b.name);
         case 'created':
-          return b.createdAt.getTime() - a.createdAt.getTime();
+          return new Date(b.created_at).getTime() - new Date(a.created_at).getTime();
         default:
           return 0;
       }
@@ -124,10 +147,6 @@ export default function BoardsTable({ boards, currentUser, onBoardsChange }: Boa
         <div className="flex items-center space-x-4">
           <Button variant="outline" size="sm">
             Explore templates
-          </Button>
-          <Button size="sm" className="bg-blue-600 hover:bg-blue-700">
-            <span className="mr-2">+</span>
-            Create new
           </Button>
         </div>
       </div>
@@ -203,7 +222,6 @@ export default function BoardsTable({ boards, currentUser, onBoardsChange }: Boa
             <thead className="bg-slate-50 border-b border-slate-200">
               <tr>
                 <th className="text-left py-3 px-6 text-sm font-medium text-slate-700">Name</th>
-                <th className="text-left py-3 px-6 text-sm font-medium text-slate-700">Online users</th>
                 <th className="text-left py-3 px-6 text-sm font-medium text-slate-700">Last opened</th>
                 <th className="text-left py-3 px-6 text-sm font-medium text-slate-700">Owner</th>
                 <th className="w-12"></th>
@@ -227,40 +245,20 @@ export default function BoardsTable({ boards, currentUser, onBoardsChange }: Boa
                       <div>
                         <div className="font-medium text-slate-900">{board.name}</div>
                         <div className="text-xs text-slate-500">
-                          Modified by {board.owner}, {formatDistanceToNow(board.updatedAt, { addSuffix: true })}
+                          Modified {formatDistanceToNow(new Date(board.updated_at), { addSuffix: true })}
                         </div>
                       </div>
                     </div>
                   </td>
                   <td className="py-4 px-6">
-                    <div className="flex items-center space-x-1">
-                      {board.onlineUsers > 0 && (
-                        <>
-                          <div className="flex -space-x-1">
-                            {[...Array(Math.min(board.onlineUsers, 3))].map((_, i) => (
-                              <Avatar key={i} className="w-6 h-6 border-2 border-white">
-                                <AvatarFallback className="bg-blue-500 text-white text-xs">
-                                  {String.fromCharCode(65 + i)}
-                                </AvatarFallback>
-                              </Avatar>
-                            ))}
-                          </div>
-                          {board.onlineUsers > 3 && (
-                            <span className="text-xs text-slate-500 ml-2">
-                              +{board.onlineUsers - 3}
-                            </span>
-                          )}
-                        </>
-                      )}
-                    </div>
-                  </td>
-                  <td className="py-4 px-6">
                     <span className="text-sm text-slate-600">
-                      {formatDistanceToNow(board.updatedAt, { addSuffix: true })}
+                      {formatDistanceToNow(new Date(board.updated_at), { addSuffix: true })}
                     </span>
                   </td>
                   <td className="py-4 px-6">
-                    <span className="text-sm text-slate-900">{board.owner}</span>
+                    <span className="text-sm text-slate-900">
+                      {board.profiles?.name || 'Unknown'}
+                    </span>
                   </td>
                   <td className="py-4 px-6">
                     <div className="flex items-center space-x-1 opacity-0 group-hover:opacity-100 transition-opacity">

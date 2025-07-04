@@ -4,9 +4,10 @@ import { motion } from 'framer-motion';
 import { ArrowRight } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import TemplateCard from './template-card';
-import { boardTemplates, BoardTemplate, boardStorage } from '@/lib/boards';
+import { boardTemplates, boardService } from '@/lib/boards';
 import { User } from '@/lib/auth';
 import { useRouter } from 'next/navigation';
+import { useToast } from '@/hooks/use-toast';
 
 interface TemplatesSectionProps {
   user: User;
@@ -15,12 +16,21 @@ interface TemplatesSectionProps {
 
 export default function TemplatesSection({ user, onBoardCreate }: TemplatesSectionProps) {
   const router = useRouter();
+  const { toast } = useToast();
 
-  const handleTemplateClick = (template: BoardTemplate) => {
-    const boardName = template.name === 'Blank board' ? 'Untitled' : template.name;
-    const newBoard = boardStorage.createBoard(boardName, template.type, user.name, user.id);
-    onBoardCreate();
-    router.push(`/board/${newBoard.id}`);
+  const handleTemplateClick = async (template: any) => {
+    try {
+      const boardName = template.name === 'Blank board' ? 'Untitled' : template.name;
+      const newBoard = await boardService.createBoard(boardName, template.type);
+      onBoardCreate();
+      router.push(`/board/${newBoard.id}`);
+    } catch (error) {
+      toast({
+        title: "Error",
+        description: "Failed to create board",
+        variant: "destructive",
+      });
+    }
   };
 
   return (

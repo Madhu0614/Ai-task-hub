@@ -1,5 +1,3 @@
-"use client";
-
 import { useEffect, useState, useCallback, useRef } from 'react';
 import { useRouter, useParams } from 'next/navigation';
 import { motion, AnimatePresence } from 'framer-motion';
@@ -7,15 +5,20 @@ import {
   ArrowLeft, Users, Share2, MoreHorizontal, ZoomIn, ZoomOut, MousePointer, Square,
   Circle, Type, Pen, Minus, MessageSquare, StickyNote, Upload, Undo, Redo, Play,
   MessageCircle, Monitor, Crown, Hand, Triangle, ArrowRight, Image as ImageIcon,
-  Grid3x3, Sparkles, Move, RotateCcw, Trash2, Copy, Lock, Columns
+  Grid3x3, Sparkles, Move, RotateCcw, Trash2, Copy, Lock, Columns, UserPlus
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Avatar, AvatarFallback } from '@/components/ui/avatar';
 import { Separator } from '@/components/ui/separator';
+import { Input } from '@/components/ui/input';
 import { getCurrentUser, User } from '@/lib/auth';
-import { Board, boardStorage } from '@/lib/boards';
+import { boardService } from '@/lib/boards';
+import { RealtimeCollaboration, CursorPosition } from '@/lib/realtime';
+import type { Board, BoardElement } from '@/lib/supabase';
 import GridCanvas from '@/components/canvas/grid-canvas';
 import CanvasElement from '@/components/canvas/canvas-element';
+import CollaborationCursors from '@/components/canvas/collaboration-cursors';
+import { useToast } from '@/hooks/use-toast';
 
 interface KanbanColumn {
   id: string;
@@ -92,6 +95,7 @@ export default function BoardPage() {
   const router = useRouter();
   const params = useParams();
   const boardId = params.id as string;
+  const { toast } = useToast();
 
   const [user, setUser] = useState<User | null>(null);
   const [board, setBoard] = useState<Board | null>(null);
@@ -109,25 +113,101 @@ export default function BoardPage() {
   const [historyIndex, setHistoryIndex] = useState(-1);
   const [showContextMenu, setShowContextMenu] = useState(false);
   const [contextMenuPos, setContextMenuPos] = useState({ x: 0, y: 0 });
+  const [showInviteModal, setShowInviteModal] = useState(false);
+  const [inviteEmail, setInviteEmail] = useState('');
+  const [cursors, setCursors] = useState<CursorPosition[]>([]);
+  
+  const realtimeRef = useRef<RealtimeCollaboration | null>(null);
+  const cursorUpdateTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
   useEffect(() => {
-    const currentUser = getCurrentUser();
-    if (!currentUser) {
-      router.push('/login');
-      return;
-    }
-    setUser(currentUser);
+    const initializeBoard = async () => {
+      try {
+        const currentUser = await getCurrentUser();
+        if (!currentUser) {
+          router.push('/login');
+          return;
+        }
+        setUser(currentUser);
 
-    const boards = boardStorage.getBoards();
-    const foundBoard = boards.find(b => b.id === boardId);
+        const boardData = await boardService.getBoard(boardId);
+        if (!boardData) {
+          toast({
+            title: "Board not found",
+            description: "The board you're looking for doesn't exist or you don't have access to it.",
+            variant: "destructive",
+          });
+          router.push('/dashboard');
+          return;
+        }
+        setBoard(boardData);
 
-    if (!foundBoard) {
-      router.push('/dashboard');
-      return;
-    }
-    setBoard(foundBoard);
-    setLoading(false);
-  }, [router, boardId]);
+        // Load board elements
+        const boardElements = await boardService.getBoardElements(boardId);
+        const convertedElements: CanvasElementData[] = boardElements.map(element => ({
+          id: element.id,
+          type: element.type as any,
+          x: element.x,
+          y: element.y,
+          width: element.width || undefined,
+          height: element.height || undefined,
+          content: element.content || undefined,
+          color: element.color || undefined,
+          strokeWidth: element.stroke_width || undefined,
+          points: element.points || undefined,
+          rotation: element.rotation,
+          locked: element.locked,
+          kanbanData: element.kanban_data || undefined,
+        }));
+        setElements(convertedElements);
+
+        // Initialize real-time collaboration
+        realtimeRef.current = new RealtimeCollaboration(boardId, currentUser.id);
+        await realtimeRef.current.initialize(
+          (newCursors) => setCursors(newCursors),
+          (newElements) => {
+            const converted: CanvasElementData[] = newElements.map(element => ({
+              id: element.id,
+              type: element.type as any,
+              x: element.x,
+              y: element.y,
+              width: element.width || undefined,
+              height: element.height || undefined,
+              content: element.content || undefined,
+              color: element.color || undefined,
+              strokeWidth: element.stroke_width || undefined,
+              points: element.points || undefined,
+              rotation: element.rotation,
+              locked: element.locked,
+              kanbanData: element.kanban_data || undefined,
+            }));
+            setElements(converted);
+          }
+        );
+
+        setLoading(false);
+      } catch (error) {
+        console.error('Error initializing board:', error);
+        toast({
+          title: "Error",
+          description: "Failed to load board",
+          variant: "destructive",
+        });
+        router.push('/dashboard');
+      }
+    };
+
+    initializeBoard();
+
+    return () => {
+      if (realtimeRef.current) {
+        realtimeRef.current.cleanup();
+      }
+      if (cursorUpdateTimeoutRef.current) {
+        clearTimeout(cursorUpdateTimeoutRef.current);
+      }
+    };
+  }, [router, boardId, toast]);
 
   const saveToHistory = useCallback((newElements: CanvasElementData[]) => {
     const newHistory = history.slice(0, historyIndex + 1);
@@ -136,85 +216,112 @@ export default function BoardPage() {
     setHistoryIndex(newHistory.length - 1);
   }, [history, historyIndex]);
 
-const handleCanvasClick = useCallback((e: React.MouseEvent) => {
-  if (selectedTool === 'select' || selectedTool === 'hand') return;
+  const saveElementToDatabase = useCallback(async (element: CanvasElementData, isUpdate = false) => {
+    try {
+      const elementData = {
+        board_id: boardId,
+        type: element.type,
+        x: element.x,
+        y: element.y,
+        width: element.width,
+        height: element.height,
+        content: element.content,
+        color: element.color,
+        stroke_width: element.strokeWidth,
+        points: element.points,
+        rotation: element.rotation || 0,
+        locked: element.locked || false,
+        kanban_data: element.kanbanData,
+      };
 
-  const rect = e.currentTarget.getBoundingClientRect();
-  const x = e.clientX - rect.left;
-  const y = e.clientY - rect.top;
-
-  const defaults = elementDefaults[selectedTool as keyof typeof elementDefaults] || {};
-
-  let newElement: CanvasElementData;
-
-  if (selectedTool === 'kanban') {
-    const kanbanDefaults = elementDefaults.kanban;
-
-    newElement = {
-      id: crypto.randomUUID(),
-      type: 'kanban',
-      x: x - (kanbanDefaults.width / 2),
-      y: y - (kanbanDefaults.height / 2),
-      width: kanbanDefaults.width,
-      height: kanbanDefaults.height,
-      rotation: 0,
-      locked: false,
-      kanbanData: {
-        columns: kanbanDefaults.kanbanData.columns.map(col => ({
-          ...col,
-          cards: col.cards.map(card => ({ ...card })) // deep clone
-        }))
+      if (isUpdate) {
+        await boardService.updateElement(element.id, elementData);
+      } else {
+        await boardService.createElement({ ...elementData, id: element.id });
       }
-    };
-  } else {
-    // Extract width and height from defaults safely
-    const { width = 50, height = 50, ...restDefaults } = defaults as {
-      width?: number;
-      height?: number;
-      [key: string]: any;
-    };
+    } catch (error) {
+      console.error('Error saving element:', error);
+      toast({
+        title: "Error",
+        description: "Failed to save changes",
+        variant: "destructive",
+      });
+    }
+  }, [boardId, toast]);
 
-    newElement = {
-      id: crypto.randomUUID(),
-      type: selectedTool as CanvasElementData['type'],
-      x: x - (width / 2),
-      y: y - (height / 2),
-      width,
-      height,
-      rotation: 0,
-      locked: false,
-      ...restDefaults
-    };
-  }
+  const handleCanvasClick = useCallback(async (e: React.MouseEvent) => {
+    if (selectedTool === 'select' || selectedTool === 'hand') return;
 
-  const newElements = [...elements, newElement];
-  setElements(newElements);
-  saveToHistory(newElements);
-  setSelectedTool('select');
-  setSelectedElements([newElement.id]);
-}, [selectedTool, elements, saveToHistory]);
-
-  const handleMouseDown = useCallback((e: React.MouseEvent) => {
     const rect = e.currentTarget.getBoundingClientRect();
     const x = e.clientX - rect.left;
     const y = e.clientY - rect.top;
 
-    if (selectedTool === 'select' && selectedElements.length > 0) {
-      const element = elements.find(el => selectedElements.includes(el.id));
-      if (element && !element.locked) {
-        setIsDragging(true);
-        setDragOffset({ x: x - element.x, y: y - element.y });
-      }
+    const defaults = elementDefaults[selectedTool as keyof typeof elementDefaults] || {};
+
+    let newElement: CanvasElementData;
+
+    if (selectedTool === 'kanban') {
+      const kanbanDefaults = elementDefaults.kanban;
+      newElement = {
+        id: crypto.randomUUID(),
+        type: 'kanban',
+        x: x - (kanbanDefaults.width / 2),
+        y: y - (kanbanDefaults.height / 2),
+        width: kanbanDefaults.width,
+        height: kanbanDefaults.height,
+        rotation: 0,
+        locked: false,
+        kanbanData: {
+          columns: kanbanDefaults.kanbanData.columns.map(col => ({
+            ...col,
+            cards: col.cards.map(card => ({ ...card }))
+          }))
+        }
+      };
+    } else {
+      const { width = 50, height = 50, ...restDefaults } = defaults as {
+        width?: number;
+        height?: number;
+        [key: string]: any;
+      };
+
+      newElement = {
+        id: crypto.randomUUID(),
+        type: selectedTool as CanvasElementData['type'],
+        x: x - (width / 2),
+        y: y - (height / 2),
+        width,
+        height,
+        rotation: 0,
+        locked: false,
+        ...restDefaults
+      };
     }
 
-    if (selectedTool === 'pen') {
-      setIsDrawing(true);
-      currentPathRef.current = [{ x, y }];
-      setRenderPath([{ x, y }]);
-    }
-  }, [selectedTool, selectedElements, elements]);
+    const newElements = [...elements, newElement];
+    setElements(newElements);
+    saveToHistory(newElements);
+    setSelectedTool('select');
+    setSelectedElements([newElement.id]);
+
+    // Save to database
+    await saveElementToDatabase(newElement);
+  }, [selectedTool, elements, saveToHistory, saveElementToDatabase]);
 
   const handleMouseMove = useCallback((e: React.MouseEvent) => {
+    // Update cursor position for real-time collaboration
+    if (realtimeRef.current && cursorUpdateTimeoutRef.current === null) {
+      const rect = e.currentTarget.getBoundingClientRect();
+      const x = e.clientX - rect.left;
+      const y = e.clientY - rect.top;
+
+      cursorUpdateTimeoutRef.current = setTimeout(() => {
+        realtimeRef.current?.updateCursor(x, y);
+        cursorUpdateTimeoutRef.current = null;
+      }, 50); // Throttle cursor updates
+    }
+
+    // Existing mouse move logic
     const rect = e.currentTarget.getBoundingClientRect();
     const x = e.clientX - rect.left;
     const y = e.clientY - rect.top;
@@ -234,127 +341,36 @@ const handleCanvasClick = useCallback((e: React.MouseEvent) => {
     }
   }, [isDragging, selectedElements, dragOffset, isDrawing, selectedTool, elements]);
 
-  const handleMouseUp = useCallback(() => {
-    if (isDragging && selectedElements.length > 0) {
-      saveToHistory(elements);
-      setIsDragging(false);
-      setDragOffset(null);
-    }
-
-    if (isDrawing && currentPathRef.current.length > 1) {
-      const newElement: CanvasElementData = {
-        id: crypto.randomUUID(),
-        type: 'pen',
-        x: Math.min(...currentPathRef.current.map(p => p.x)),
-        y: Math.min(...currentPathRef.current.map(p => p.y)),
-        points: [...currentPathRef.current],
-        color: '#64748B',
-        strokeWidth: 2,
-        rotation: 0,
-        locked: false
-      };
-      
-      const newElements = [...elements, newElement];
-      setElements(newElements);
-      saveToHistory(newElements);
-    }
-
-    setIsDrawing(false);
-    currentPathRef.current = [];
-    setRenderPath([]);
-  }, [isDragging, isDrawing, elements, selectedElements, saveToHistory]);
-
-  const handleElementUpdate = useCallback((id: string, updates: Partial<CanvasElementData>) => {
+  const handleElementUpdate = useCallback(async (id: string, updates: Partial<CanvasElementData>) => {
     const newElements = elements.map(el => el.id === id ? { ...el, ...updates } : el);
     setElements(newElements);
-  }, [elements]);
+    
+    // Save to database
+    const updatedElement = newElements.find(el => el.id === id);
+    if (updatedElement) {
+      await saveElementToDatabase(updatedElement, true);
+    }
+  }, [elements, saveElementToDatabase]);
 
-  const handleElementSelect = useCallback((id: string, multiSelect = false) => {
-    if (multiSelect) {
-      setSelectedElements(prev => 
-        prev.includes(id) ? prev.filter(elId => elId !== id) : [...prev, id]
-      );
-    } else {
-      setSelectedElements([id]);
-    }
-  }, []);
+  const handleInviteCollaborator = async () => {
+    if (!inviteEmail.trim()) return;
 
-  const handleUndo = useCallback(() => {
-    if (historyIndex > 0) {
-      setHistoryIndex(historyIndex - 1);
-      setElements(history[historyIndex - 1]);
+    try {
+      await boardService.addCollaborator(boardId, inviteEmail.trim());
+      toast({
+        title: "Invitation sent",
+        description: `${inviteEmail} has been invited to collaborate on this board.`,
+      });
+      setInviteEmail('');
+      setShowInviteModal(false);
+    } catch (error) {
+      toast({
+        title: "Error",
+        description: error instanceof Error ? error.message : "Failed to invite collaborator",
+        variant: "destructive",
+      });
     }
-  }, [history, historyIndex]);
-
-  const handleRedo = useCallback(() => {
-    if (historyIndex < history.length - 1) {
-      setHistoryIndex(historyIndex + 1);
-      setElements(history[historyIndex + 1]);
-    }
-  }, [history, historyIndex]);
-
-  const handleDelete = useCallback(() => {
-    if (selectedElements.length > 0) {
-      const newElements = elements.filter(el => !selectedElements.includes(el.id));
-      setElements(newElements);
-      saveToHistory(newElements);
-      setSelectedElements([]);
-    }
-  }, [elements, selectedElements, saveToHistory]);
-
-  const handleDuplicate = useCallback(() => {
-    if (selectedElements.length > 0) {
-      const elementsToClone = elements.filter(el => selectedElements.includes(el.id));
-      const clonedElements = elementsToClone.map(el => ({
-        ...el,
-        id: crypto.randomUUID(),
-        x: el.x + 20,
-        y: el.y + 20
-      }));
-      
-      const newElements = [...elements, ...clonedElements];
-      setElements(newElements);
-      saveToHistory(newElements);
-      setSelectedElements(clonedElements.map(el => el.id));
-    }
-  }, [elements, selectedElements, saveToHistory]);
-
-  const handleContextMenu = useCallback((e: React.MouseEvent) => {
-    e.preventDefault();
-    setContextMenuPos({ x: e.clientX, y: e.clientY });
-    setShowContextMenu(true);
-  }, []);
-
-  const handleKeyDown = useCallback((e: KeyboardEvent) => {
-    if (e.key === 'Delete' && selectedElements.length > 0) {
-      handleDelete();
-    }
-    if (e.key === 'Escape') {
-      setSelectedElements([]);
-      setSelectedTool('select');
-    }
-    if ((e.ctrlKey || e.metaKey) && e.key === 'z' && !e.shiftKey) {
-      e.preventDefault();
-      handleUndo();
-    }
-    if ((e.ctrlKey || e.metaKey) && (e.key === 'y' || (e.key === 'z' && e.shiftKey))) {
-      e.preventDefault();
-      handleRedo();
-    }
-    if ((e.ctrlKey || e.metaKey) && e.key === 'd') {
-      e.preventDefault();
-      handleDuplicate();
-    }
-  }, [selectedElements, handleDelete, handleUndo, handleRedo, handleDuplicate]);
-
-  useEffect(() => {
-    document.addEventListener('keydown', handleKeyDown);
-    document.addEventListener('click', () => setShowContextMenu(false));
-    return () => {
-      document.removeEventListener('keydown', handleKeyDown);
-      document.removeEventListener('click', () => setShowContextMenu(false));
-    };
-  }, [handleKeyDown]);
+  };
 
   if (loading || !user || !board) {
     return (
@@ -404,44 +420,32 @@ const handleCanvasClick = useCallback((e: React.MouseEvent) => {
         </div>
 
         <div className="flex items-center space-x-3">
-          <Button variant="ghost" size="sm" className="text-slate-600 hover:bg-slate-100">
-            <MoreHorizontal className="h-4 w-4" />
-          </Button>
-          
-          <Button variant="outline" size="sm" className="text-slate-700 border-slate-300 hover:bg-slate-50">
-            <Crown className="h-4 w-4 mr-2 text-orange-500" />
-            Upgrade
+          <Button 
+            variant="outline" 
+            size="sm" 
+            onClick={() => setShowInviteModal(true)}
+            className="text-slate-700 border-slate-300 hover:bg-slate-50"
+          >
+            <UserPlus className="h-4 w-4 mr-2" />
+            Invite
           </Button>
           
           <div className="flex items-center space-x-2">
             <div className="flex -space-x-1">
-              {['A', 'B', 'C'].map((letter, i) => (
-                <Avatar key={i} className="w-8 h-8 border-2 border-white">
-                  <AvatarFallback className={`text-white text-xs ${
-                    i === 0 ? 'bg-blue-500' : i === 1 ? 'bg-emerald-500' : 'bg-violet-500'
-                  }`}>
-                    {letter}
+              {cursors.slice(0, 3).map((cursor, i) => (
+                <Avatar key={cursor.user.id} className="w-8 h-8 border-2 border-white">
+                  <AvatarFallback className="text-white text-xs bg-blue-500">
+                    {cursor.user.name.substring(0, 2).toUpperCase()}
                   </AvatarFallback>
                 </Avatar>
               ))}
             </div>
-            <Button variant="ghost" size="sm" className="text-slate-600 hover:bg-slate-100">
-              <Users className="h-4 w-4" />
-            </Button>
+            {cursors.length > 3 && (
+              <span className="text-xs text-slate-500 bg-slate-100 px-2 py-1 rounded-full">
+                +{cursors.length - 3}
+              </span>
+            )}
           </div>
-          
-          <Button variant="ghost" size="sm" className="text-slate-600 hover:bg-slate-100">
-            <MessageCircle className="h-4 w-4" />
-          </Button>
-          
-          <Button variant="ghost" size="sm" className="text-slate-600 hover:bg-slate-100">
-            <Monitor className="h-4 w-4" />
-          </Button>
-          
-          <Button size="sm" className="bg-blue-600 hover:bg-blue-700 text-white shadow-sm">
-            <Play className="h-4 w-4 mr-2" />
-            Present
-          </Button>
           
           <Button size="sm" className="bg-blue-600 hover:bg-blue-700 text-white shadow-sm">
             <Share2 className="h-4 w-4 mr-2" />
@@ -482,30 +486,6 @@ const handleCanvasClick = useCallback((e: React.MouseEvent) => {
               </motion.button>
             );
           })}
-          
-          <Separator className="w-8 my-3" />
-          
-          <motion.button
-            whileHover={{ scale: 1.1, y: -2 }}
-            whileTap={{ scale: 0.95 }}
-            onClick={handleUndo}
-            disabled={historyIndex <= 0}
-            className="w-10 h-10 rounded-xl flex items-center justify-center text-slate-600 hover:bg-slate-100 disabled:opacity-50 disabled:cursor-not-allowed shadow-sm transition-all duration-200"
-            title="Undo"
-          >
-            <Undo className="h-5 w-5" />
-          </motion.button>
-          
-          <motion.button
-            whileHover={{ scale: 1.1, y: -2 }}
-            whileTap={{ scale: 0.95 }}
-            onClick={handleRedo}
-            disabled={historyIndex >= history.length - 1}
-            className="w-10 h-10 rounded-xl flex items-center justify-center text-slate-600 hover:bg-slate-100 disabled:opacity-50 disabled:cursor-not-allowed shadow-sm transition-all duration-200"
-            title="Redo"
-          >
-            <Redo className="h-5 w-5" />
-          </motion.button>
         </motion.div>
 
         {/* Main Canvas Area */}
@@ -518,10 +498,7 @@ const handleCanvasClick = useCallback((e: React.MouseEvent) => {
             <div 
               className="w-full h-full relative"
               onClick={handleCanvasClick}
-              onMouseDown={handleMouseDown}
               onMouseMove={handleMouseMove}
-              onMouseUp={handleMouseUp}
-              onContextMenu={handleContextMenu}
               style={{ cursor: selectedTool === 'pen' ? 'crosshair' : selectedTool === 'hand' ? 'grab' : 'default' }}
             >
               <AnimatePresence>
@@ -530,75 +507,17 @@ const handleCanvasClick = useCallback((e: React.MouseEvent) => {
                     key={element.id}
                     {...element}
                     onUpdate={handleElementUpdate}
-                    onSelect={(id) => handleElementSelect(id, false)}
+                    onSelect={(id) => setSelectedElements([id])}
                     isSelected={selectedElements.includes(element.id)}
                     zoom={zoomLevel}
                   />
                 ))}
               </AnimatePresence>
               
-              {/* Current drawing path */}
-              {isDrawing && renderPath.length > 1 && (
-                <svg className="absolute inset-0 pointer-events-none">
-                  <motion.path
-                    initial={{ pathLength: 0 }}
-                    animate={{ pathLength: 1 }}
-                    d={`M ${renderPath.map(p => `${p.x},${p.y}`).join(' L ')}`}
-                    stroke="#64748B"
-                    strokeWidth="2"
-                    fill="none"
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                  />
-                </svg>
-              )}
+              {/* Real-time collaboration cursors */}
+              <CollaborationCursors cursors={cursors} zoom={zoomLevel} />
             </div>
           </GridCanvas>
-
-          {/* Context Menu */}
-          <AnimatePresence>
-            {showContextMenu && (
-              <motion.div
-                initial={{ opacity: 0, scale: 0.95 }}
-                animate={{ opacity: 1, scale: 1 }}
-                exit={{ opacity: 0, scale: 0.95 }}
-                transition={{ duration: 0.1 }}
-                className="absolute bg-white rounded-lg shadow-lg border border-slate-200 py-2 z-50"
-                style={{ left: contextMenuPos.x, top: contextMenuPos.y }}
-              >
-                <button
-                  onClick={handleDuplicate}
-                  disabled={selectedElements.length === 0}
-                  className="w-full px-4 py-2 text-left text-sm text-slate-700 hover:bg-slate-100 disabled:opacity-50 flex items-center"
-                >
-                  <Copy className="h-4 w-4 mr-2" />
-                  Duplicate
-                </button>
-                <button
-                  onClick={handleDelete}
-                  disabled={selectedElements.length === 0}
-                  className="w-full px-4 py-2 text-left text-sm text-red-600 hover:bg-red-50 disabled:opacity-50 flex items-center"
-                >
-                  <Trash2 className="h-4 w-4 mr-2" />
-                  Delete
-                </button>
-              </motion.div>
-            )}
-          </AnimatePresence>
-
-          {/* Selection Info */}
-          <AnimatePresence>
-            {selectedElements.length > 0 && (
-              <motion.div
-                initial={{ opacity: 0, y: 10 }}
-                animate={{ opacity: 1, y: 0 }}
-                exit={{ opacity: 0, y: 10 }}
-                className="absolute top-6 left-1/2 transform -translate-x-1/2 bg-white/95 backdrop-blur-sm rounded-lg px-4 py-2 text-sm text-slate-700 border border-slate-200 shadow-sm"
-              >
-                {selectedElements.length} element{selectedElements.length > 1 ? 's' : ''} selected
-              </motion.div>
-            )}
-          </AnimatePresence>
 
           {/* Zoom Controls */}
           <motion.div 
@@ -627,58 +546,60 @@ const handleCanvasClick = useCallback((e: React.MouseEvent) => {
               <ZoomIn className="h-4 w-4" />
             </Button>
           </motion.div>
-
-          {/* Help Button */}
-          <motion.div 
-            initial={{ opacity: 0, scale: 0.9 }}
-            animate={{ opacity: 1, scale: 1 }}
-            transition={{ delay: 0.4 }}
-            className="absolute bottom-6 left-6"
-          >
-            <Button
-              variant="ghost"
-              size="sm"
-              className="w-10 h-10 p-0 bg-white/95 backdrop-blur-sm border border-slate-200 shadow-lg rounded-full text-slate-600 hover:bg-slate-50"
-            >
-              ?
-            </Button>
-          </motion.div>
-
-          {/* AI Magic Button */}
-          <motion.div 
-            initial={{ opacity: 0, scale: 0.9 }}
-            animate={{ opacity: 1, scale: 1 }}
-            transition={{ delay: 0.5 }}
-            className="absolute top-6 right-6"
-          >
-            <Button
-              variant="ghost"
-              size="sm"
-              className="w-12 h-12 p-0 bg-gradient-to-br from-orange-100 to-amber-100 border border-orange-200 shadow-lg rounded-full text-orange-600 hover:from-orange-200 hover:to-amber-200 transition-all duration-200"
-              title="AI Magic"
-            >
-              <Sparkles className="h-6 w-6" />
-            </Button>
-          </motion.div>
-
-          {/* Tool Info */}
-          <AnimatePresence>
-            {selectedTool !== 'select' && (
-              <motion.div
-                initial={{ opacity: 0, y: -10 }}
-                animate={{ opacity: 1, y: 0 }}
-                exit={{ opacity: 0, y: -10 }}
-                className="absolute top-6 left-6 bg-white/95 backdrop-blur-sm rounded-lg px-4 py-2 text-sm text-slate-600 border border-slate-200 shadow-sm"
-              >
-                {selectedTool === 'pen' ? 'Click and drag to draw' : 
-                 selectedTool === 'hand' ? 'Drag to pan the canvas' :
-                 selectedTool === 'kanban' ? 'Click to add Kanban board' :
-                 `Click to add ${selectedTool}`}
-              </motion.div>
-            )}
-          </AnimatePresence>
         </div>
       </div>
+
+      {/* Invite Modal */}
+      <AnimatePresence>
+        {showInviteModal && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 bg-black/50 flex items-center justify-center z-50"
+            onClick={() => setShowInviteModal(false)}
+          >
+            <motion.div
+              initial={{ scale: 0.9, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.9, opacity: 0 }}
+              className="bg-white rounded-xl p-6 w-full max-w-md mx-4"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <h3 className="text-lg font-semibold text-slate-900 mb-4">Invite Collaborator</h3>
+              <div className="space-y-4">
+                <div>
+                  <label className="text-sm font-medium text-slate-700 mb-2 block">
+                    Email Address
+                  </label>
+                  <Input
+                    type="email"
+                    placeholder="Enter email address"
+                    value={inviteEmail}
+                    onChange={(e) => setInviteEmail(e.target.value)}
+                    className="w-full"
+                  />
+                </div>
+                <div className="flex space-x-3">
+                  <Button
+                    variant="outline"
+                    onClick={() => setShowInviteModal(false)}
+                    className="flex-1"
+                  >
+                    Cancel
+                  </Button>
+                  <Button
+                    onClick={handleInviteCollaborator}
+                    className="flex-1 bg-blue-600 hover:bg-blue-700"
+                  >
+                    Send Invite
+                  </Button>
+                </div>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
     </div>
   );
 }
