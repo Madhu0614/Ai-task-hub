@@ -62,16 +62,66 @@ export const boardTemplates: BoardTemplate[] = [
 ];
 
 export const boardService = {
+  // Test database connection and authentication
+  async testConnection(): Promise<{ success: boolean; error?: string }> {
+    try {
+      console.log('Testing database connection...');
+      
+      // Test basic connection
+      const { data: testData, error: testError } = await supabase
+        .from('profiles')
+        .select('count')
+        .limit(1);
+
+      if (testError) {
+        console.error('Database connection test failed:', testError);
+        return { success: false, error: `Database connection failed: ${testError.message}` };
+      }
+
+      // Test authentication
+      const { data: { user }, error: authError } = await supabase.auth.getUser();
+      
+      if (authError) {
+        console.error('Authentication test failed:', authError);
+        return { success: false, error: `Authentication failed: ${authError.message}` };
+      }
+
+      if (!user) {
+        return { success: false, error: 'User not authenticated' };
+      }
+
+      console.log('Database connection and authentication successful');
+      return { success: true };
+    } catch (error) {
+      console.error('Connection test error:', error);
+      return { 
+        success: false, 
+        error: error instanceof Error ? error.message : 'Unknown connection error' 
+      };
+    }
+  },
+
   // Get all boards for current user
   async getBoards(): Promise<Board[]> {
     try {
+      console.log('Fetching boards...');
+      
+      // Test connection first
+      const connectionTest = await this.testConnection();
+      if (!connectionTest.success) {
+        throw new Error(connectionTest.error);
+      }
+
       const { data: { user } } = await supabase.auth.getUser();
       
       if (!user) {
         throw new Error('Not authenticated');
       }
 
-      const { data, error } = await supabase
+      console.log('Fetching boards for user:', user.id);
+
+      // Get boards owned by user
+      const { data: ownedBoards, error: ownedError } = await supabase
         .from('boards')
         .select(`
           *,
@@ -82,44 +132,65 @@ export const boardService = {
             avatar_url
           )
         `)
-        .or(`owner_id.eq.${user.id},id.in.(${await this.getCollaboratorBoardIds(user.id)})`)
+        .eq('owner_id', user.id)
         .order('updated_at', { ascending: false });
 
-      if (error) {
-        console.error('Error fetching boards:', error);
-        throw new Error(`Failed to fetch boards: ${error.message}`);
+      if (ownedError) {
+        console.error('Error fetching owned boards:', ownedError);
+        throw new Error(`Failed to fetch owned boards: ${ownedError.message}`);
       }
 
-      return data || [];
+      // Get boards where user is a collaborator
+      const { data: collaboratorBoards, error: collaboratorError } = await supabase
+        .from('board_collaborators')
+        .select(`
+          board_id,
+          boards:board_id (
+            *,
+            profiles:owner_id (
+              id,
+              name,
+              email,
+              avatar_url
+            )
+          )
+        `)
+        .eq('user_id', user.id);
+
+      if (collaboratorError) {
+        console.error('Error fetching collaborator boards:', collaboratorError);
+        // Don't throw error for collaborator boards, just log it
+      }
+
+      // Combine owned and collaborated boards
+      const allBoards = [...(ownedBoards || [])];
+      
+      if (collaboratorBoards) {
+        collaboratorBoards.forEach((collab: any) => {
+          if (collab.boards && !allBoards.find(board => board.id === collab.boards.id)) {
+            allBoards.push(collab.boards);
+          }
+        });
+      }
+
+      console.log('Successfully fetched boards:', allBoards.length);
+      return allBoards;
     } catch (error) {
       console.error('Error in getBoards:', error);
       throw error;
     }
   },
 
-  // Get board IDs where user is a collaborator
-  async getCollaboratorBoardIds(userId: string): Promise<string> {
-    try {
-      const { data, error } = await supabase
-        .from('board_collaborators')
-        .select('board_id')
-        .eq('user_id', userId);
-
-      if (error) {
-        console.error('Error fetching collaborator boards:', error);
-        return '';
-      }
-
-      return data?.map(item => item.board_id).join(',') || '';
-    } catch (error) {
-      console.error('Error in getCollaboratorBoardIds:', error);
-      return '';
-    }
-  },
-
   // Get a specific board
   async getBoard(boardId: string): Promise<Board | null> {
     try {
+      console.log('Fetching board:', boardId);
+      
+      const connectionTest = await this.testConnection();
+      if (!connectionTest.success) {
+        throw new Error(connectionTest.error);
+      }
+
       const { data: { user } } = await supabase.auth.getUser();
       
       if (!user) {
@@ -142,19 +213,14 @@ export const boardService = {
 
       if (error) {
         if (error.code === 'PGRST116') {
-          return null; // Board not found
+          console.log('Board not found:', boardId);
+          return null;
         }
         console.error('Error fetching board:', error);
         throw new Error(`Failed to fetch board: ${error.message}`);
       }
 
-      // Check if user has access to this board
-      const hasAccess = data.owner_id === user.id || await this.isCollaborator(boardId, user.id);
-      
-      if (!hasAccess) {
-        throw new Error('You do not have access to this board');
-      }
-
+      console.log('Successfully fetched board:', data.name);
       return data;
     } catch (error) {
       console.error('Error in getBoard:', error);
@@ -162,25 +228,17 @@ export const boardService = {
     }
   },
 
-  // Check if user is a collaborator
-  async isCollaborator(boardId: string, userId: string): Promise<boolean> {
-    try {
-      const { data, error } = await supabase
-        .from('board_collaborators')
-        .select('id')
-        .eq('board_id', boardId)
-        .eq('user_id', userId)
-        .single();
-
-      return !error && !!data;
-    } catch (error) {
-      return false;
-    }
-  },
-
   // Create a new board
   async createBoard(name: string, type: string): Promise<Board> {
     try {
+      console.log('Creating board:', { name, type });
+      
+      // Test connection and authentication first
+      const connectionTest = await this.testConnection();
+      if (!connectionTest.success) {
+        throw new Error(connectionTest.error);
+      }
+
       const { data: { user } } = await supabase.auth.getUser();
       
       if (!user) {
@@ -196,18 +254,27 @@ export const boardService = {
         throw new Error('Board type is required');
       }
 
-      // First, ensure the user's profile exists
+      console.log('Creating board for user:', user.id);
+
+      // Ensure the user's profile exists
       const { data: profile, error: profileError } = await supabase
         .from('profiles')
-        .select('id')
+        .select('id, name')
         .eq('id', user.id)
         .single();
 
-      if (profileError || !profile) {
+      if (profileError) {
+        console.error('Profile check failed:', profileError);
         throw new Error('User profile not found. Please try signing out and back in.');
       }
 
-      // Create the board
+      if (!profile) {
+        throw new Error('User profile not found. Please try signing out and back in.');
+      }
+
+      console.log('User profile verified:', profile.name);
+
+      // Create the board with explicit data
       const boardData = {
         name: name.trim(),
         type: type,
@@ -215,7 +282,7 @@ export const boardService = {
         starred: false,
       };
 
-      console.log('Creating board with data:', boardData);
+      console.log('Inserting board with data:', boardData);
 
       const { data, error } = await supabase
         .from('boards')
@@ -232,7 +299,13 @@ export const boardService = {
         .single();
 
       if (error) {
-        console.error('Error creating board:', error);
+        console.error('Board creation failed:', error);
+        console.error('Error details:', {
+          code: error.code,
+          message: error.message,
+          details: error.details,
+          hint: error.hint
+        });
         throw new Error(`Failed to create board: ${error.message}`);
       }
 
@@ -251,20 +324,9 @@ export const boardService = {
   // Update a board
   async updateBoard(boardId: string, updates: Partial<Board>): Promise<Board> {
     try {
-      const { data: { user } } = await supabase.auth.getUser();
-      
-      if (!user) {
-        throw new Error('Not authenticated');
-      }
-
-      // Check if user has permission to update this board
-      const board = await this.getBoard(boardId);
-      if (!board) {
-        throw new Error('Board not found');
-      }
-
-      if (board.owner_id !== user.id && !(await this.isCollaborator(boardId, user.id))) {
-        throw new Error('You do not have permission to update this board');
+      const connectionTest = await this.testConnection();
+      if (!connectionTest.success) {
+        throw new Error(connectionTest.error);
       }
 
       const { data, error } = await supabase
@@ -297,20 +359,9 @@ export const boardService = {
   // Delete a board
   async deleteBoard(boardId: string): Promise<void> {
     try {
-      const { data: { user } } = await supabase.auth.getUser();
-      
-      if (!user) {
-        throw new Error('Not authenticated');
-      }
-
-      // Check if user is the owner
-      const board = await this.getBoard(boardId);
-      if (!board) {
-        throw new Error('Board not found');
-      }
-
-      if (board.owner_id !== user.id) {
-        throw new Error('Only the board owner can delete this board');
+      const connectionTest = await this.testConnection();
+      if (!connectionTest.success) {
+        throw new Error(connectionTest.error);
       }
 
       const { error } = await supabase
@@ -352,16 +403,9 @@ export const boardService = {
   // Get board elements
   async getBoardElements(boardId: string): Promise<BoardElement[]> {
     try {
-      const { data: { user } } = await supabase.auth.getUser();
-      
-      if (!user) {
-        throw new Error('Not authenticated');
-      }
-
-      // Check if user has access to this board
-      const board = await this.getBoard(boardId);
-      if (!board) {
-        throw new Error('Board not found or access denied');
+      const connectionTest = await this.testConnection();
+      if (!connectionTest.success) {
+        throw new Error(connectionTest.error);
       }
 
       const { data, error } = await supabase
@@ -385,16 +429,9 @@ export const boardService = {
   // Create board element
   async createElement(element: Omit<BoardElement, 'id' | 'created_at' | 'updated_at'>): Promise<BoardElement> {
     try {
-      const { data: { user } } = await supabase.auth.getUser();
-      
-      if (!user) {
-        throw new Error('Not authenticated');
-      }
-
-      // Check if user has access to this board
-      const board = await this.getBoard(element.board_id);
-      if (!board) {
-        throw new Error('Board not found or access denied');
+      const connectionTest = await this.testConnection();
+      if (!connectionTest.success) {
+        throw new Error(connectionTest.error);
       }
 
       const { data, error } = await supabase
@@ -418,10 +455,9 @@ export const boardService = {
   // Update board element
   async updateElement(elementId: string, updates: Partial<BoardElement>): Promise<BoardElement> {
     try {
-      const { data: { user } } = await supabase.auth.getUser();
-      
-      if (!user) {
-        throw new Error('Not authenticated');
+      const connectionTest = await this.testConnection();
+      if (!connectionTest.success) {
+        throw new Error(connectionTest.error);
       }
 
       const { data, error } = await supabase
@@ -446,10 +482,9 @@ export const boardService = {
   // Delete board element
   async deleteElement(elementId: string): Promise<void> {
     try {
-      const { data: { user } } = await supabase.auth.getUser();
-      
-      if (!user) {
-        throw new Error('Not authenticated');
+      const connectionTest = await this.testConnection();
+      if (!connectionTest.success) {
+        throw new Error(connectionTest.error);
       }
 
       const { error } = await supabase
@@ -470,16 +505,9 @@ export const boardService = {
   // Get board collaborators
   async getCollaborators(boardId: string): Promise<BoardCollaborator[]> {
     try {
-      const { data: { user } } = await supabase.auth.getUser();
-      
-      if (!user) {
-        throw new Error('Not authenticated');
-      }
-
-      // Check if user has access to this board
-      const board = await this.getBoard(boardId);
-      if (!board) {
-        throw new Error('Board not found or access denied');
+      const connectionTest = await this.testConnection();
+      if (!connectionTest.success) {
+        throw new Error(connectionTest.error);
       }
 
       const { data, error } = await supabase
@@ -510,20 +538,9 @@ export const boardService = {
   // Add collaborator
   async addCollaborator(boardId: string, userEmail: string, role: string = 'editor'): Promise<BoardCollaborator> {
     try {
-      const { data: { user } } = await supabase.auth.getUser();
-      
-      if (!user) {
-        throw new Error('Not authenticated');
-      }
-
-      // Check if user is the board owner
-      const board = await this.getBoard(boardId);
-      if (!board) {
-        throw new Error('Board not found');
-      }
-
-      if (board.owner_id !== user.id) {
-        throw new Error('Only the board owner can add collaborators');
+      const connectionTest = await this.testConnection();
+      if (!connectionTest.success) {
+        throw new Error(connectionTest.error);
       }
 
       // First find the user by email
@@ -582,20 +599,9 @@ export const boardService = {
   // Remove collaborator
   async removeCollaborator(boardId: string, userId: string): Promise<void> {
     try {
-      const { data: { user } } = await supabase.auth.getUser();
-      
-      if (!user) {
-        throw new Error('Not authenticated');
-      }
-
-      // Check if user is the board owner
-      const board = await this.getBoard(boardId);
-      if (!board) {
-        throw new Error('Board not found');
-      }
-
-      if (board.owner_id !== user.id) {
-        throw new Error('Only the board owner can remove collaborators');
+      const connectionTest = await this.testConnection();
+      if (!connectionTest.success) {
+        throw new Error(connectionTest.error);
       }
 
       const { error } = await supabase
