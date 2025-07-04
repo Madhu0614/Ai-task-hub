@@ -1,22 +1,10 @@
-export interface Board {
-  id: string;
-  name: string;
-  type: BoardType;
-  createdAt: Date;
-  updatedAt: Date;
-  owner: string;
-  ownerId: string;
-  onlineUsers: number;
-  starred: boolean;
-  thumbnail?: string;
-}
-
-export type BoardType = 'blank' | 'flowchart' | 'mindmap' | 'kanban' | 'retrospective' | 'brainwriting';
+import { supabase } from './supabase';
+import type { Board, BoardElement, BoardCollaborator } from './supabase';
 
 export interface BoardTemplate {
   id: string;
   name: string;
-  type: BoardType;
+  type: string;
   description: string;
   icon: string;
   thumbnail: string;
@@ -73,139 +61,268 @@ export const boardTemplates: BoardTemplate[] = [
   }
 ];
 
-const BOARDS_STORAGE_KEY = 'miro_boards';
+export const boardService = {
+  // Get all boards for current user
+  async getBoards(): Promise<Board[]> {
+    const { data, error } = await supabase
+      .from('boards')
+      .select(`
+        *,
+        profiles:owner_id (
+          id,
+          name,
+          email,
+          avatar_url
+        )
+      `)
+      .order('updated_at', { ascending: false });
 
-export const boardStorage = {
-  getBoards: (): Board[] => {
-    if (typeof window === 'undefined') return [];
-    
-    try {
-      const stored = localStorage.getItem(BOARDS_STORAGE_KEY);
-      if (stored) {
-        const boards = JSON.parse(stored);
-        return boards.map((board: any) => ({
-          ...board,
-          createdAt: new Date(board.createdAt),
-          updatedAt: new Date(board.updatedAt)
-        }));
-      }
-    } catch (error) {
-      console.error('Error reading boards from localStorage:', error);
+    if (error) {
+      throw new Error(error.message);
     }
-    
-    return [];
+
+    return data || [];
   },
 
-  saveBoards: (boards: Board[]): void => {
-    if (typeof window === 'undefined') return;
+  // Get a specific board
+  async getBoard(boardId: string): Promise<Board | null> {
+    const { data, error } = await supabase
+      .from('boards')
+      .select(`
+        *,
+        profiles:owner_id (
+          id,
+          name,
+          email,
+          avatar_url
+        )
+      `)
+      .eq('id', boardId)
+      .single();
+
+    if (error) {
+      if (error.code === 'PGRST116') {
+        return null; // Board not found
+      }
+      throw new Error(error.message);
+    }
+
+    return data;
+  },
+
+  // Create a new board
+  async createBoard(name: string, type: string): Promise<Board> {
+    const { data: { user } } = await supabase.auth.getUser();
     
-    try {
-      localStorage.setItem(BOARDS_STORAGE_KEY, JSON.stringify(boards));
-    } catch (error) {
-      console.error('Error saving boards to localStorage:', error);
+    if (!user) {
+      throw new Error('Not authenticated');
+    }
+
+    const { data, error } = await supabase
+      .from('boards')
+      .insert({
+        name,
+        type,
+        owner_id: user.id,
+      })
+      .select(`
+        *,
+        profiles:owner_id (
+          id,
+          name,
+          email,
+          avatar_url
+        )
+      `)
+      .single();
+
+    if (error) {
+      throw new Error(error.message);
+    }
+
+    return data;
+  },
+
+  // Update a board
+  async updateBoard(boardId: string, updates: Partial<Board>): Promise<Board> {
+    const { data, error } = await supabase
+      .from('boards')
+      .update(updates)
+      .eq('id', boardId)
+      .select(`
+        *,
+        profiles:owner_id (
+          id,
+          name,
+          email,
+          avatar_url
+        )
+      `)
+      .single();
+
+    if (error) {
+      throw new Error(error.message);
+    }
+
+    return data;
+  },
+
+  // Delete a board
+  async deleteBoard(boardId: string): Promise<void> {
+    const { error } = await supabase
+      .from('boards')
+      .delete()
+      .eq('id', boardId);
+
+    if (error) {
+      throw new Error(error.message);
     }
   },
 
-  createBoard: (name: string, type: BoardType, owner: string, ownerId: string): Board => {
-    const boards = boardStorage.getBoards();
-    const newBoard: Board = {
-      id: Math.random().toString(36).substr(2, 9),
-      name,
-      type,
-      createdAt: new Date(),
-      updatedAt: new Date(),
-      owner,
-      ownerId,
-      onlineUsers: Math.floor(Math.random() * 5) + 1,
-      starred: false
-    };
-    
-    boards.unshift(newBoard);
-    boardStorage.saveBoards(boards);
-    return newBoard;
+  // Toggle star status
+  async toggleStar(boardId: string): Promise<Board> {
+    // First get current starred status
+    const { data: board } = await supabase
+      .from('boards')
+      .select('starred')
+      .eq('id', boardId)
+      .single();
+
+    if (!board) {
+      throw new Error('Board not found');
+    }
+
+    return this.updateBoard(boardId, { starred: !board.starred });
   },
 
-  updateBoard: (boardId: string, updates: Partial<Board>): Board | null => {
-    const boards = boardStorage.getBoards();
-    const boardIndex = boards.findIndex(board => board.id === boardId);
-    
-    if (boardIndex === -1) return null;
-    
-    boards[boardIndex] = {
-      ...boards[boardIndex],
-      ...updates,
-      updatedAt: new Date()
-    };
-    
-    boardStorage.saveBoards(boards);
-    return boards[boardIndex];
+  // Get board elements
+  async getBoardElements(boardId: string): Promise<BoardElement[]> {
+    const { data, error } = await supabase
+      .from('board_elements')
+      .select('*')
+      .eq('board_id', boardId)
+      .order('created_at', { ascending: true });
+
+    if (error) {
+      throw new Error(error.message);
+    }
+
+    return data || [];
   },
 
-  deleteBoard: (boardId: string): boolean => {
-    const boards = boardStorage.getBoards();
-    const filteredBoards = boards.filter(board => board.id !== boardId);
-    
-    if (filteredBoards.length === boards.length) return false;
-    
-    boardStorage.saveBoards(filteredBoards);
-    return true;
+  // Create board element
+  async createElement(element: Omit<BoardElement, 'id' | 'created_at' | 'updated_at'>): Promise<BoardElement> {
+    const { data, error } = await supabase
+      .from('board_elements')
+      .insert(element)
+      .select('*')
+      .single();
+
+    if (error) {
+      throw new Error(error.message);
+    }
+
+    return data;
   },
 
-  toggleStar: (boardId: string): boolean => {
-    const boards = boardStorage.getBoards();
-    const board = boards.find(board => board.id === boardId);
-    
-    if (!board) return false;
-    
-    board.starred = !board.starred;
-    board.updatedAt = new Date();
-    
-    boardStorage.saveBoards(boards);
-    return board.starred;
-  }
-};
+  // Update board element
+  async updateElement(elementId: string, updates: Partial<BoardElement>): Promise<BoardElement> {
+    const { data, error } = await supabase
+      .from('board_elements')
+      .update(updates)
+      .eq('id', elementId)
+      .select('*')
+      .single();
 
-// Initialize with sample data if no boards exist
-export const initializeSampleBoards = (userId: string, userName: string): void => {
-  const existingBoards = boardStorage.getBoards();
-  
-  if (existingBoards.length === 0) {
-    const sampleBoards: Board[] = [
-      {
-        id: 'sample-1',
-        name: 'Untitled',
-        type: 'blank',
-        createdAt: new Date(Date.now() - 86400000), // Yesterday
-        updatedAt: new Date(Date.now() - 86400000),
-        owner: userName,
-        ownerId: userId,
-        onlineUsers: 1,
-        starred: false
-      },
-      {
-        id: 'sample-2',
-        name: 'Kanban Framework',
-        type: 'kanban',
-        createdAt: new Date(Date.now() - 86400000),
-        updatedAt: new Date(Date.now() - 86400000),
-        owner: 'madhu',
-        ownerId: 'madhu-id',
-        onlineUsers: 2,
-        starred: false
-      },
-      {
-        id: 'sample-3',
-        name: 'Customer Journey Map',
-        type: 'mindmap',
-        createdAt: new Date(Date.now() - 172800000), // 2 days ago
-        updatedAt: new Date(Date.now() - 86400000),
-        owner: 'madhu',
-        ownerId: 'madhu-id',
-        onlineUsers: 0,
-        starred: true
-      }
-    ];
-    
-    boardStorage.saveBoards(sampleBoards);
-  }
+    if (error) {
+      throw new Error(error.message);
+    }
+
+    return data;
+  },
+
+  // Delete board element
+  async deleteElement(elementId: string): Promise<void> {
+    const { error } = await supabase
+      .from('board_elements')
+      .delete()
+      .eq('id', elementId);
+
+    if (error) {
+      throw new Error(error.message);
+    }
+  },
+
+  // Get board collaborators
+  async getCollaborators(boardId: string): Promise<BoardCollaborator[]> {
+    const { data, error } = await supabase
+      .from('board_collaborators')
+      .select(`
+        *,
+        profiles:user_id (
+          id,
+          name,
+          email,
+          avatar_url
+        )
+      `)
+      .eq('board_id', boardId);
+
+    if (error) {
+      throw new Error(error.message);
+    }
+
+    return data || [];
+  },
+
+  // Add collaborator
+  async addCollaborator(boardId: string, userEmail: string, role: string = 'editor'): Promise<BoardCollaborator> {
+    // First find the user by email
+    const { data: profile, error: profileError } = await supabase
+      .from('profiles')
+      .select('id')
+      .eq('email', userEmail)
+      .single();
+
+    if (profileError || !profile) {
+      throw new Error('User not found');
+    }
+
+    const { data, error } = await supabase
+      .from('board_collaborators')
+      .insert({
+        board_id: boardId,
+        user_id: profile.id,
+        role,
+      })
+      .select(`
+        *,
+        profiles:user_id (
+          id,
+          name,
+          email,
+          avatar_url
+        )
+      `)
+      .single();
+
+    if (error) {
+      throw new Error(error.message);
+    }
+
+    return data;
+  },
+
+  // Remove collaborator
+  async removeCollaborator(boardId: string, userId: string): Promise<void> {
+    const { error } = await supabase
+      .from('board_collaborators')
+      .delete()
+      .eq('board_id', boardId)
+      .eq('user_id', userId);
+
+    if (error) {
+      throw new Error(error.message);
+    }
+  },
 };

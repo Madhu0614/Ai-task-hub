@@ -3,37 +3,59 @@
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { motion } from 'framer-motion';
-import { Eye, EyeOff, Mail, Lock } from 'lucide-react';
+import { Eye, EyeOff, Mail, Lock, User } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
-import { signIn } from '@/lib/auth';
+import { signUp } from '@/lib/auth';
 import { useToast } from '@/hooks/use-toast';
 
-export default function LoginForm() {
+export default function SignUpForm() {
+  const [name, setName] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
+  const [showConfirmPassword, setShowConfirmPassword] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const router = useRouter();
   const { toast } = useToast();
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    
+    if (password !== confirmPassword) {
+      toast({
+        title: "Error",
+        description: "Passwords do not match",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    if (password.length < 6) {
+      toast({
+        title: "Error",
+        description: "Password must be at least 6 characters long",
+        variant: "destructive",
+      });
+      return;
+    }
+
     setIsLoading(true);
 
     try {
-      await signIn(email, password);
+      await signUp(email, password, name);
       toast({
-        title: "Welcome back!",
-        description: "You have successfully signed in.",
+        title: "Account created!",
+        description: "Please check your email to verify your account.",
       });
-      router.push('/dashboard');
+      router.push('/login');
     } catch (error) {
       toast({
         title: "Error",
-        description: error instanceof Error ? error.message : "Invalid credentials",
+        description: error instanceof Error ? error.message : "Failed to create account",
         variant: "destructive",
       });
     } finally {
@@ -59,13 +81,31 @@ export default function LoginForm() {
             >
               <span className="text-2xl font-bold text-white">M</span>
             </motion.div>
-            <CardTitle className="text-2xl font-bold text-slate-900">Welcome to MiroFlow</CardTitle>
+            <CardTitle className="text-2xl font-bold text-slate-900">Create Account</CardTitle>
             <CardDescription className="text-slate-600">
-              Sign in to your account to continue
+              Join MiroFlow and start collaborating
             </CardDescription>
           </CardHeader>
           <CardContent className="p-8">
             <form onSubmit={handleSubmit} className="space-y-6">
+              <div className="space-y-2">
+                <Label htmlFor="name" className="text-sm font-medium text-slate-700">
+                  Full Name
+                </Label>
+                <div className="relative">
+                  <User className="absolute left-3 top-3 h-5 w-5 text-slate-400" />
+                  <Input
+                    id="name"
+                    type="text"
+                    placeholder="Enter your full name"
+                    value={name}
+                    onChange={(e) => setName(e.target.value)}
+                    className="pl-11 bg-slate-50 border-slate-200 focus:bg-white transition-all duration-200 h-12 rounded-xl"
+                    required
+                  />
+                </div>
+              </div>
+
               <div className="space-y-2">
                 <Label htmlFor="email" className="text-sm font-medium text-slate-700">
                   Email
@@ -83,6 +123,7 @@ export default function LoginForm() {
                   />
                 </div>
               </div>
+
               <div className="space-y-2">
                 <Label htmlFor="password" className="text-sm font-medium text-slate-700">
                   Password
@@ -92,7 +133,7 @@ export default function LoginForm() {
                   <Input
                     id="password"
                     type={showPassword ? 'text' : 'password'}
-                    placeholder="Enter your password"
+                    placeholder="Create a password"
                     value={password}
                     onChange={(e) => setPassword(e.target.value)}
                     className="pl-11 pr-12 bg-slate-50 border-slate-200 focus:bg-white transition-all duration-200 h-12 rounded-xl"
@@ -113,6 +154,38 @@ export default function LoginForm() {
                   </Button>
                 </div>
               </div>
+
+              <div className="space-y-2">
+                <Label htmlFor="confirmPassword" className="text-sm font-medium text-slate-700">
+                  Confirm Password
+                </Label>
+                <div className="relative">
+                  <Lock className="absolute left-3 top-3 h-5 w-5 text-slate-400" />
+                  <Input
+                    id="confirmPassword"
+                    type={showConfirmPassword ? 'text' : 'password'}
+                    placeholder="Confirm your password"
+                    value={confirmPassword}
+                    onChange={(e) => setConfirmPassword(e.target.value)}
+                    className="pl-11 pr-12 bg-slate-50 border-slate-200 focus:bg-white transition-all duration-200 h-12 rounded-xl"
+                    required
+                  />
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    className="absolute right-0 top-0 h-full px-3 py-2 hover:bg-transparent"
+                    onClick={() => setShowConfirmPassword(!showConfirmPassword)}
+                  >
+                    {showConfirmPassword ? (
+                      <EyeOff className="h-5 w-5 text-slate-400" />
+                    ) : (
+                      <Eye className="h-5 w-5 text-slate-400" />
+                    )}
+                  </Button>
+                </div>
+              </div>
+
               <Button
                 type="submit"
                 className="w-full bg-gradient-to-r from-blue-500 to-violet-600 hover:from-blue-600 hover:to-violet-700 text-white font-medium py-3 h-12 rounded-xl shadow-lg hover:shadow-xl transition-all duration-200"
@@ -125,18 +198,19 @@ export default function LoginForm() {
                     className="w-5 h-5 border-2 border-white border-t-transparent rounded-full"
                   />
                 ) : (
-                  'Sign In'
+                  'Create Account'
                 )}
               </Button>
             </form>
+
             <div className="mt-8 text-center">
               <p className="text-sm text-slate-600">
-                Don't have an account?{' '}
+                Already have an account?{' '}
                 <button
-                  onClick={() => router.push('/signup')}
+                  onClick={() => router.push('/login')}
                   className="text-blue-600 hover:text-blue-700 font-medium transition-colors"
                 >
-                  Sign up
+                  Sign in
                 </button>
               </p>
             </div>

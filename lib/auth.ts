@@ -1,88 +1,139 @@
+import { supabase } from './supabase';
+import type { Profile } from './supabase';
+
 export interface User {
   id: string;
   email: string;
   name: string;
-  avatar?: string;
+  avatar_url?: string;
   team: string;
 }
 
 export interface AuthState {
   user: User | null;
   isAuthenticated: boolean;
+  loading: boolean;
 }
 
-const AUTH_STORAGE_KEY = 'miro_auth';
+// Convert Supabase profile to User
+const profileToUser = (profile: Profile): User => ({
+  id: profile.id,
+  email: profile.email,
+  name: profile.name,
+  avatar_url: profile.avatar_url,
+  team: profile.team,
+});
 
-export const authStorage = {
-  getAuth: (): AuthState => {
-    if (typeof window === 'undefined') {
-      return { user: null, isAuthenticated: false };
-    }
-    
-    try {
-      const stored = localStorage.getItem(AUTH_STORAGE_KEY);
-      if (stored) {
-        return JSON.parse(stored);
-      }
-    } catch (error) {
-      console.error('Error reading auth from localStorage:', error);
-    }
-    
-    return { user: null, isAuthenticated: false };
-  },
+export const signUp = async (email: string, password: string, name: string): Promise<User> => {
+  const { data, error } = await supabase.auth.signUp({
+    email,
+    password,
+    options: {
+      data: {
+        name,
+      },
+    },
+  });
 
-  setAuth: (authState: AuthState): void => {
-    if (typeof window === 'undefined') return;
-    
-    try {
-      localStorage.setItem(AUTH_STORAGE_KEY, JSON.stringify(authState));
-    } catch (error) {
-      console.error('Error saving auth to localStorage:', error);
-    }
-  },
+  if (error) {
+    throw new Error(error.message);
+  }
 
-  clearAuth: (): void => {
-    if (typeof window === 'undefined') return;
-    
-    try {
-      localStorage.removeItem(AUTH_STORAGE_KEY);
-    } catch (error) {
-      console.error('Error clearing auth from localStorage:', error);
-    }
+  if (!data.user) {
+    throw new Error('Failed to create user');
+  }
+
+  // Get the profile that was created by the trigger
+  const { data: profile, error: profileError } = await supabase
+    .from('profiles')
+    .select('*')
+    .eq('id', data.user.id)
+    .single();
+
+  if (profileError || !profile) {
+    throw new Error('Failed to create user profile');
+  }
+
+  return profileToUser(profile);
+};
+
+export const signIn = async (email: string, password: string): Promise<User> => {
+  const { data, error } = await supabase.auth.signInWithPassword({
+    email,
+    password,
+  });
+
+  if (error) {
+    throw new Error(error.message);
+  }
+
+  if (!data.user) {
+    throw new Error('Failed to sign in');
+  }
+
+  // Get user profile
+  const { data: profile, error: profileError } = await supabase
+    .from('profiles')
+    .select('*')
+    .eq('id', data.user.id)
+    .single();
+
+  if (profileError || !profile) {
+    throw new Error('Failed to get user profile');
+  }
+
+  return profileToUser(profile);
+};
+
+export const signOut = async (): Promise<void> => {
+  const { error } = await supabase.auth.signOut();
+  if (error) {
+    throw new Error(error.message);
   }
 };
 
-export const login = async (email: string, password: string): Promise<User> => {
-  // Simulate API call
-  await new Promise(resolve => setTimeout(resolve, 1000));
+export const getCurrentUser = async (): Promise<User | null> => {
+  const { data: { user } } = await supabase.auth.getUser();
   
-  // Simple validation for demo
-  if (email && password.length >= 6) {
-    const user: User = {
-      id: Math.random().toString(36).substr(2, 9),
-      email,
-      name: email.split('@')[0],
-      avatar: `https://api.dicebear.com/7.x/avatars/svg?seed=${email}`,
-      team: 'SmartFlow'
-    };
-    
-    const authState: AuthState = {
-      user,
-      isAuthenticated: true
-    };
-    
-    authStorage.setAuth(authState);
-    return user;
+  if (!user) {
+    return null;
   }
+
+  // Get user profile
+  const { data: profile, error } = await supabase
+    .from('profiles')
+    .select('*')
+    .eq('id', user.id)
+    .single();
+
+  if (error || !profile) {
+    return null;
+  }
+
+  return profileToUser(profile);
+};
+
+export const updateProfile = async (updates: Partial<Omit<User, 'id'>>): Promise<User> => {
+  const { data: { user } } = await supabase.auth.getUser();
   
-  throw new Error('Invalid credentials');
+  if (!user) {
+    throw new Error('Not authenticated');
+  }
+
+  const { data: profile, error } = await supabase
+    .from('profiles')
+    .update(updates)
+    .eq('id', user.id)
+    .select('*')
+    .single();
+
+  if (error || !profile) {
+    throw new Error('Failed to update profile');
+  }
+
+  return profileToUser(profile);
 };
 
-export const logout = (): void => {
-  authStorage.clearAuth();
-};
-
-export const getCurrentUser = (): User | null => {
-  const authState = authStorage.getAuth();
-  return authState.isAuthenticated ? authState.user : null;
-};
+// Legacy functions for compatibility
+export const login = signIn;
+export const logout = signOut;
