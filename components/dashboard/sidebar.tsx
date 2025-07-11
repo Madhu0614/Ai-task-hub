@@ -47,11 +47,7 @@ export default function Sidebar({ user, currentPage, onPageChange }: SidebarProp
       <div className="p-6 border-b border-slate-100">
         <div className="flex items-center space-x-3">
           <Avatar className="w-10 h-10 ring-2 ring-slate-100">
-<<<<<<< HEAD
-            <AvatarImage src={user.avatar} alt={user.name} />
-=======
             <AvatarImage src={undefined} alt={user.name} />
->>>>>>> 4e01379a83a4e2c0596b6864c6ee0a82e4ffc4ad
             <AvatarFallback className="bg-gradient-to-br from-blue-600 to-violet-600 text-white text-sm font-medium">
               {user.name.substring(0, 2).toUpperCase()}
             </AvatarFallback>
