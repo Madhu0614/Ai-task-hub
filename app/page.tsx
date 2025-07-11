@@ -8,15 +8,6 @@ export default function HomePage() {
   const router = useRouter();
 
   useEffect(() => {
-<<<<<<< HEAD
-    const user = getCurrentUser();
-    if (user) {
-      router.push('/dashboard');
-    } else {
-      router.push('/login');
-    }
-  }, [router]);
-=======
     const checkUser = async () => {
       const user = await getCurrentUser();
       if (user) {
@@ -27,7 +18,6 @@ export default function HomePage() {
     };
     checkUser();
   }, []);
->>>>>>> 4e01379a83a4e2c0596b6864c6ee0a82e4ffc4ad
 
   return (
     <div className="min-h-screen bg-slate-50 flex items-center justify-center">

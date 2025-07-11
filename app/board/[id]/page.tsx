@@ -119,11 +119,7 @@ export default function BoardPage() {
   const [showInviteModal, setShowInviteModal] = useState(false);
   const [inviteEmails, setInviteEmails] = useState<string[]>(['']);
   const [cursors, setCursors] = useState<CursorPosition[]>([]);
-<<<<<<< HEAD
-  const [currentUserCursor, setCurrentUserCursor] = useState<{ x: number; y: number } | null>(null);
-=======
   const [currentUserCursor, setCurrentUserCursor] = useState<{ x: number; y: number } | undefined>(undefined);
->>>>>>> 4e01379a83a4e2c0596b6864c6ee0a82e4ffc4ad
   
   const realtimeRef = useRef<RealtimeCollaboration | null>(null);
   const cursorUpdateTimeoutRef = useRef<NodeJS.Timeout | null>(null);
@@ -263,11 +259,7 @@ export default function BoardPage() {
       if (isUpdate) {
         await boardService.updateElement(element.id, elementData);
       } else {
-<<<<<<< HEAD
-        await boardService.createElement({ ...elementData, id: element.id });
-=======
         await boardService.createElement(elementData);
->>>>>>> 4e01379a83a4e2c0596b6864c6ee0a82e4ffc4ad
       }
     } catch (error) {
       console.error('Error saving element:', error);
