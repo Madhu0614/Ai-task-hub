@@ -91,7 +91,11 @@ export default function Header({ user }: HeaderProps) {
           <DropdownMenuTrigger asChild>
             <Button variant="ghost" className="p-1 h-10 w-10 rounded-full hover:bg-slate-100">
               <Avatar className="w-8 h-8">
+<<<<<<< HEAD
                 <AvatarImage src={user.avatar} alt={user.name} />
+=======
+                <AvatarImage src="/default-avatar.png" alt={user.name} />
+>>>>>>> 4e01379a83a4e2c0596b6864c6ee0a82e4ffc4ad
                 <AvatarFallback className="bg-gradient-to-br from-blue-500 to-violet-600 text-white text-sm font-medium">
                   {user.name.substring(0, 2).toUpperCase()}
                 </AvatarFallback>
