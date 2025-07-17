@@ -3,6 +3,7 @@
 import { useState, useRef, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Plus, X, Edit3, GripVertical, Palette } from 'lucide-react';
+import CollaborationCursors from './collaboration-cursors';
 
 interface KanbanCard {
   id: string;
@@ -26,6 +27,16 @@ interface KanbanBoardProps {
   };
   onUpdate: (data: { columns: KanbanColumn[] }) => void;
   locked?: boolean;
+}
+
+interface CursorPosition {
+  user: {
+    id: string;
+    name: string;
+    avatar_url: string;
+  };
+  x: number;
+  y: number;
 }
 
 const cardColors = [
@@ -52,6 +63,12 @@ export default function KanbanBoard({ data, onUpdate, locked = false }: KanbanBo
   const [showColorPicker, setShowColorPicker] = useState<string | null>(null);
   const dragOverColumn = useRef<string | null>(null);
 
+  // --- Cursor collaboration state ---
+  const [cursors, setCursors] = useState<CursorPosition[]>([]);
+  const [currentUserCursor, setCurrentUserCursor] = useState<{ x: number; y: number } | null>(null);
+  // Mock current user (replace with real user data if available)
+  const currentUser = { id: 'user-1', name: 'You', avatar_url: '' };
+
   // --- WebSocket integration start ---
   const ws = useRef<WebSocket | null>(null);
   // Track if the update is local to avoid loops
@@ -71,6 +88,12 @@ export default function KanbanBoard({ data, onUpdate, locked = false }: KanbanBo
           // Prevent loop: only update if not local
           isLocalUpdate.current = false;
           onUpdate(msg.payload);
+        } else if (msg.type === 'cursor_update' && msg.payload) {
+          setCursors((prev) => {
+            // Update or add the cursor for the user
+            const filtered = prev.filter(c => c.user.id !== msg.payload.user.id);
+            return [...filtered, msg.payload];
+          });
         }
       } catch (e) {
         console.error('WebSocket message error:', e);
@@ -241,8 +264,31 @@ export default function KanbanBoard({ data, onUpdate, locked = false }: KanbanBo
     return colorConfig || cardColors[0];
   };
 
+  // Broadcast cursor position on mouse move
+  const handleMouseMove = (e: React.MouseEvent<HTMLDivElement>) => {
+    const rect = (e.target as HTMLDivElement).getBoundingClientRect();
+    const x = e.clientX - rect.left;
+    const y = e.clientY - rect.top;
+    setCurrentUserCursor({ x, y });
+    if (ws.current && ws.current.readyState === WebSocket.OPEN) {
+      ws.current.send(
+        JSON.stringify({
+          type: 'cursor_update',
+          payload: { x, y, user: currentUser },
+        })
+      );
+    }
+  };
+
   return (
-    <div className="flex gap-4 p-4 h-full overflow-x-auto">
+    <div className="flex gap-4 p-4 h-full overflow-x-auto relative" onMouseMove={handleMouseMove}>
+      {/* Render collaboration cursors */}
+      <CollaborationCursors
+        cursors={cursors.filter(c => c.user.id !== currentUser.id)}
+        zoom={100}
+        currentUser={currentUser}
+        currentUserCursor={currentUserCursor}
+      />
       <AnimatePresence>
         {data.columns.map((column, index) => (
           <motion.div
