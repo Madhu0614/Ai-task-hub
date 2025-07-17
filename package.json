@@ -1,4 +1,11 @@
 {
+  "name": "ai-task-hub-ws-server",
+  "version": "1.0.0",
+  "main": "websocket-server.js",
+  "scripts": {
+    "start": "node websocket-server.js",
+    "build": "next build"
+  },
   "dependencies": {
     "ws": "^8.0.0"
   }
