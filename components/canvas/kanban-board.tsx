@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useRef } from 'react';
+import { useState, useRef, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Plus, X, Edit3, GripVertical, Palette } from 'lucide-react';
 
@@ -52,6 +52,57 @@ export default function KanbanBoard({ data, onUpdate, locked = false }: KanbanBo
   const [showColorPicker, setShowColorPicker] = useState<string | null>(null);
   const dragOverColumn = useRef<string | null>(null);
 
+  // --- WebSocket integration start ---
+  const ws = useRef<WebSocket | null>(null);
+  // Track if the update is local to avoid loops
+  const isLocalUpdate = useRef(false);
+
+  useEffect(() => {
+    ws.current = new WebSocket('wss://ai-task-hub.onrender.com');
+
+    ws.current.onopen = () => {
+      console.log('WebSocket connected!');
+    };
+
+    ws.current.onmessage = (event) => {
+      try {
+        const msg = JSON.parse(event.data);
+        if (msg.type === 'board_update' && msg.payload) {
+          // Prevent loop: only update if not local
+          isLocalUpdate.current = false;
+          onUpdate(msg.payload);
+        }
+      } catch (e) {
+        console.error('WebSocket message error:', e);
+      }
+    };
+
+    ws.current.onerror = (err) => {
+      console.error('WebSocket error:', err);
+    };
+
+    ws.current.onclose = () => {
+      console.log('WebSocket disconnected.');
+    };
+
+    return () => {
+      ws.current?.close();
+    };
+  }, [onUpdate]);
+
+  // Helper to broadcast board updates
+  const broadcastBoardUpdate = (columns: KanbanColumn[]) => {
+    if (ws.current && ws.current.readyState === WebSocket.OPEN) {
+      ws.current.send(
+        JSON.stringify({
+          type: 'board_update',
+          payload: { columns },
+        })
+      );
+    }
+  };
+  // --- WebSocket integration end ---
+
   const addCard = (columnId: string) => {
     if (locked) return;
     
@@ -71,6 +122,8 @@ export default function KanbanBoard({ data, onUpdate, locked = false }: KanbanBo
     );
 
     onUpdate({ columns: updatedColumns });
+    isLocalUpdate.current = true;
+    broadcastBoardUpdate(updatedColumns);
     setEditingCard(newCard.id);
   };
 
@@ -84,6 +137,8 @@ export default function KanbanBoard({ data, onUpdate, locked = false }: KanbanBo
     );
 
     onUpdate({ columns: updatedColumns });
+    isLocalUpdate.current = true;
+    broadcastBoardUpdate(updatedColumns);
   };
 
   const updateCard = (columnId: string, cardId: string, updates: Partial<KanbanCard>) => {
@@ -101,6 +156,8 @@ export default function KanbanBoard({ data, onUpdate, locked = false }: KanbanBo
     );
 
     onUpdate({ columns: updatedColumns });
+    isLocalUpdate.current = true;
+    broadcastBoardUpdate(updatedColumns);
   };
 
   const updateColumnTitle = (columnId: string, newTitle: string) => {
@@ -111,6 +168,8 @@ export default function KanbanBoard({ data, onUpdate, locked = false }: KanbanBo
     );
 
     onUpdate({ columns: updatedColumns });
+    isLocalUpdate.current = true;
+    broadcastBoardUpdate(updatedColumns);
   };
 
   const addColumn = () => {
@@ -124,6 +183,8 @@ export default function KanbanBoard({ data, onUpdate, locked = false }: KanbanBo
     };
 
     onUpdate({ columns: [...data.columns, newColumn] });
+    isLocalUpdate.current = true;
+    broadcastBoardUpdate([...data.columns, newColumn]);
   };
 
   const removeColumn = (columnId: string) => {
@@ -131,6 +192,8 @@ export default function KanbanBoard({ data, onUpdate, locked = false }: KanbanBo
 
     const updatedColumns = data.columns.filter(col => col.id !== columnId);
     onUpdate({ columns: updatedColumns });
+    isLocalUpdate.current = true;
+    broadcastBoardUpdate(updatedColumns);
   };
 
   const handleDragStart = (card: KanbanCard, columnId: string) => {
@@ -167,6 +230,8 @@ export default function KanbanBoard({ data, onUpdate, locked = false }: KanbanBo
     });
 
     onUpdate({ columns: updatedColumns });
+    isLocalUpdate.current = true;
+    broadcastBoardUpdate(updatedColumns);
     setDraggedCard(null);
     dragOverColumn.current = null;
   };

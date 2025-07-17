@@ -460,6 +460,8 @@ export const boardService = {
         throw new Error(connectionTest.error);
       }
 
+      console.log('Updating element:', { elementId, updates });
+
       const { data, error } = await supabase
         .from('board_elements')
         .update(updates)
